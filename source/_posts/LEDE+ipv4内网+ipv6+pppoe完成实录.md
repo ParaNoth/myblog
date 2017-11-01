@@ -1,9 +1,10 @@
 ---
-title: LEDE ipv4内网+ipv6+pppoe完成实录
+title: LEDE+ipv4内网+ipv6+pppoe完成实录
 date: 2017-10-31 11:40:03
-tags:["文档","LEDE","教程"]
-category:技术文档
+tags: ["文档","LEDE","教程"]
+category: 技术文档
 ---
+
 搬到北区以后呢，意外的发现楼里的宽带线路改成电信的了。因此办了电信的宽带。但是这样会有另一个不太好的结果，那就是接上路由以后上不了内网了。本着搞事的原则，在柳老司机的怂恿下，买了一个小米mini的路由器，刷了LEDE来做内外网融合。
 
 ## 小米mini路由器刷LEDE
@@ -70,9 +71,9 @@ category:技术文档
 	主机名:192.168.31.1 用户名:root 密码:”获取ssh步骤中得到的密码”
 
 	输入:
-	```  
-	mtd -r write /tmp/XXX.bin OS1
-	```  
+
+		mtd -r write /tmp/XXX.bin OS1
+ 
 	（原教程写的是`mtd -r write /tmp/XXX.bin firmware`，但是不成功，查了以后发现小米路由改了命令。）
 
 	XXX.bin为你上传的文件名
@@ -98,3 +99,92 @@ category:技术文档
 
 	选择普通话(Chinese)
 
+
+## ipv4内网+pppoe融合
+
+此部分内容主要参考：[复旦pt-关于南区路由器连内网](http://pt.vm.fudan.edu.cn/index.php?topic=96649.msg1024380;highlight=%E8%B7%AF%E7%94%B1+%E8%A1%A8)。**此部分内容只有pt用户才能访问**
+### 1.ipv4与ipv6地址获取
+复旦北区公寓的电信线路上的内网地址是可以被DHCP分配的。而且ipv6的分配方式颇为诡异……
+
+ipv4:将WAN口的接口之一设为DHCP客户端。  
+
+![](https://i.imgur.com/oVJyilN.png)
+
+ipv6:将WAN口的另一个接口设为DHCPv6客户端，并设参数为force,禁止：
+![](https://i.imgur.com/ot0sVup.png)
+
+### 2.新建接口pppoe拨号：
+进入网络-接口界面，点击新建接口，随便取个名字，协议选择pppoe，包括接口选上网所用的接口，即你的ipv4与ipv6线的接口。
+![](https://i.imgur.com/48Yajml.png)
+
+在基本设置中填入拔号帐号密码。在防火墙设置中选wan。
+![](https://i.imgur.com/VW1JCPB.png)
+
+最终的接口界面如图：
+![](https://i.imgur.com/wTRZ1JL.png)
+
+### 3.设置路由表
+
+**注意**，作为示例，我要说明一下，在我的图片中：内网ipv4=WAN_FDU，pppoe=WAN，ipv6=WAN6。如果参考我的方法请自行做好对应。
+
+进入网络-静态路由表界面，填入下图的路由表：
+
+![](https://i.imgur.com/UZ8ACeK.png)
+
+接口请选ipv4的接口，此处就是wan_fdu。ipv4网关请自行对应自己的网关。
+
+然后重新连接各接口。
+
+## ipv6+nat设置
+本部分主要参考内容：
+[Padavan /Openwrt /LEDE下实现ipv6 nat /napt66](http://www.jianshu.com/p/eb07eaac6167)
+[CSDN-在OpenWrt上配置原生IPv6 NAT](http://blog.csdn.net/cod1ng/article/details/45421025)
+[TS的自留地-在OpenWrt上配置原生IPv6 NAT](http://tang.su/2017/03/openwrt-ipv6-nat/)
+
+听各路大神说IPV6 NAT是一个很邪恶的东西，因为IPV6就是为了消灭NAT。但总之在路由器下面用这招才能上得去ipv6……
+
+1. 安装`ip6tables`和`kmod-ipt-nat6`。
+
+		opkg update
+		opkg install ip6tables
+		opkg install kmod-ipt-nat6
+2. 使用WinSCP更改`/etc/config/network`文件内容,在`config interface 'lan'`下添加一行：
+
+		option ip6addr 'fc00:100:100:1::1/64'
+
+3. 更改`/etc/config/dhcp`文件,将`config dhcp 'lan'`那一栏改为以下内容:
+```
+config dhcp 'lan'
+    option interface 'lan'
+    option start '100'
+    option limit '150'
+    option leasetime '12h'
+    option dhcpv6 'server'
+    option ra 'server'
+    option ra_management '1'
+    option ra_default '1'
+```
+	
+4. 更改`/etc/firewall.user`，假设WAN对应的接口为eth0.2，则添加以下内容：
+
+		ip6tables -t nat -A POSTROUTING -o eth0.2 -j MASQUERADE
+
+5. 在路由器下面的设备中用`tracepath6 -b tv.byr.cn`(linux)，`tracert tv.byr.cn`
+(windows)命令，获取目前网络的IPv6网关地址(找最上面的IPv6地址)，假定是`2001:1234:1234:1234::1`。
+	这一步，如果出现不能连接外网的情况，请在路由器上输入：
+	```
+uci set network.wan6.sourcefilter=0
+uci commit network
+ifup wan6
+```
+
+6. 使用`route -A inet6 add default gw 2001:1234:1234:1234::1`命令，为路由器添加默认网关。这一步非常重要，不进行的话是上不了IPv6的。。。完成之后，连接到路由器的计算机应该可以访问IPv6网站了。
+
+	重启之后，需要重新添加网关，如果要做到路由器开机自动添加该网关,可以在/etc/hotplug.d/iface/下新建一个文件90-ipv6,给予可执行权限,内容为(注意替换为自己的网关地址)
+
+``` bash
+#!/bin/sh
+[ "$ACTION" = ifup ] || exit 0
+route -A inet6 add default gw 2001:1234:1234:1234::1
+
+```
