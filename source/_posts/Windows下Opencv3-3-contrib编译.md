@@ -104,5 +104,9 @@ E:\OpenSourceCode\OpenCV\opencv_build\install\x64\vc14\bin
 
 ```python
 import cv2
+print cv2.__version__
 ```
 
+效果如图：
+
+![](https://i.imgur.com/NsAlaO9.png)
